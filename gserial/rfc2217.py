@@ -1,19 +1,303 @@
-from serial.rfc2217 import *
-
 import struct
 import logging
+import telnetlib
 from urllib import parse
 
-from gevent import queue, socket, lock, spawn, sleep
+from gevent import event, queue, socket, lock, spawn, sleep
 
+import serial
 from serial import SerialBase, SerialException, to_bytes, \
-    iterbytes, portNotOpenError, Timeout, rfc2217
+    iterbytes, portNotOpenError, Timeout
 
 
 log = logging.getLogger('gserial.rfc2217')
 
+# telnet protocol characters
+SE = telnetlib.SE    # Subnegotiation End
+NOP = telnetlib.NOP   # No Operation
+DM = telnetlib.DM    # Data Mark
+BRK = telnetlib.BRK   # Break
+IP = telnetlib.IP    # Interrupt process
+AO = telnetlib.AO    # Abort output
+AYT = telnetlib.AYT   # Are You There
+EC = telnetlib.EC    # Erase Character
+EL = telnetlib.EL    # Erase Line
+GA = telnetlib.GA    # Go Ahead
+SB = telnetlib.SB    # Subnegotiation Begin
+WILL = telnetlib.WILL
+WONT = telnetlib.WONT
+DO = telnetlib.DO
+DONT = telnetlib.DONT
+IAC = telnetlib.IAC # Interpret As Command
+IAC_DOUBLED = 2*IAC
 
-class TelnetSubnegotiation(rfc2217.TelnetSubnegotiation):
+# selected telnet options
+BINARY = telnetlib.BINARY    # 8-bit data path
+ECHO = telnetlib.ECHO      # echo
+SGA = telnetlib.SGA # suppress go ahead
+
+# RFC2217
+COM_PORT_OPTION = b'\x2c'
+
+# Client to Access Server
+SET_BAUDRATE = b'\x01'
+SET_DATASIZE = b'\x02'
+SET_PARITY = b'\x03'
+SET_STOPSIZE = b'\x04'
+SET_CONTROL = b'\x05'
+NOTIFY_LINESTATE = b'\x06'
+NOTIFY_MODEMSTATE = b'\x07'
+FLOWCONTROL_SUSPEND = b'\x08'
+FLOWCONTROL_RESUME = b'\x09'
+SET_LINESTATE_MASK = b'\x0a'
+SET_MODEMSTATE_MASK = b'\x0b'
+PURGE_DATA = b'\x0c'
+
+SERVER_SET_BAUDRATE = b'\x65'
+SERVER_SET_DATASIZE = b'\x66'
+SERVER_SET_PARITY = b'\x67'
+SERVER_SET_STOPSIZE = b'\x68'
+SERVER_SET_CONTROL = b'\x69'
+SERVER_NOTIFY_LINESTATE = b'\x6a'
+SERVER_NOTIFY_MODEMSTATE = b'\x6b'
+SERVER_FLOWCONTROL_SUSPEND = b'\x6c'
+SERVER_FLOWCONTROL_RESUME = b'\x6d'
+SERVER_SET_LINESTATE_MASK = b'\x6e'
+SERVER_SET_MODEMSTATE_MASK = b'\x6f'
+SERVER_PURGE_DATA = b'\x70'
+
+SET_CONTROL_REQ_FLOW_SETTING = b'\x00'        # Request Com Port Flow Control Setting (outbound/both)
+SET_CONTROL_USE_NO_FLOW_CONTROL = b'\x01'     # Use No Flow Control (outbound/both)
+SET_CONTROL_USE_SW_FLOW_CONTROL = b'\x02'     # Use XON/XOFF Flow Control (outbound/both)
+SET_CONTROL_USE_HW_FLOW_CONTROL = b'\x03'     # Use HARDWARE Flow Control (outbound/both)
+SET_CONTROL_REQ_BREAK_STATE = b'\x04'         # Request BREAK State
+SET_CONTROL_BREAK_ON = b'\x05'                # Set BREAK State ON
+SET_CONTROL_BREAK_OFF = b'\x06'               # Set BREAK State OFF
+SET_CONTROL_REQ_DTR = b'\x07'                 # Request DTR Signal State
+SET_CONTROL_DTR_ON = b'\x08'                  # Set DTR Signal State ON
+SET_CONTROL_DTR_OFF = b'\x09'                 # Set DTR Signal State OFF
+SET_CONTROL_REQ_RTS = b'\x0a'                 # Request RTS Signal State
+SET_CONTROL_RTS_ON = b'\x0b'                  # Set RTS Signal State ON
+SET_CONTROL_RTS_OFF = b'\x0c'                 # Set RTS Signal State OFF
+SET_CONTROL_REQ_FLOW_SETTING_IN = b'\x0d'     # Request Com Port Flow Control Setting (inbound)
+SET_CONTROL_USE_NO_FLOW_CONTROL_IN = b'\x0e'  # Use No Flow Control (inbound)
+SET_CONTROL_USE_SW_FLOW_CONTOL_IN = b'\x0f'   # Use XON/XOFF Flow Control (inbound)
+SET_CONTROL_USE_HW_FLOW_CONTOL_IN = b'\x10'   # Use HARDWARE Flow Control (inbound)
+SET_CONTROL_USE_DCD_FLOW_CONTROL = b'\x11'    # Use DCD Flow Control (outbound/both)
+SET_CONTROL_USE_DTR_FLOW_CONTROL = b'\x12'    # Use DTR Flow Control (inbound)
+SET_CONTROL_USE_DSR_FLOW_CONTROL = b'\x13'    # Use DSR Flow Control (outbound/both)
+
+LINESTATE_MASK_TIMEOUT = 128        # Time-out Error
+LINESTATE_MASK_SHIFTREG_EMPTY = 64  # Transfer Shift Register Empty
+LINESTATE_MASK_TRANSREG_EMPTY = 32  # Transfer Holding Register Empty
+LINESTATE_MASK_BREAK_DETECT = 16    # Break-detect Error
+LINESTATE_MASK_FRAMING_ERROR = 8    # Framing Error
+LINESTATE_MASK_PARTIY_ERROR = 4     # Parity Error
+LINESTATE_MASK_OVERRUN_ERROR = 2    # Overrun Error
+LINESTATE_MASK_DATA_READY = 1       # Data Ready
+
+MODEMSTATE_MASK_CD = 128            # Receive Line Signal Detect (also known as Carrier Detect)
+MODEMSTATE_MASK_RI = 64             # Ring Indicator
+MODEMSTATE_MASK_DSR = 32            # Data-Set-Ready Signal State
+MODEMSTATE_MASK_CTS = 16            # Clear-To-Send Signal State
+MODEMSTATE_MASK_CD_CHANGE = 8       # Delta Receive Line Signal Detect
+MODEMSTATE_MASK_RI_CHANGE = 4       # Trailing-edge Ring Detector
+MODEMSTATE_MASK_DSR_CHANGE = 2      # Delta Data-Set-Ready
+MODEMSTATE_MASK_CTS_CHANGE = 1      # Delta Clear-To-Send
+
+PURGE_RECEIVE_BUFFER = b'\x01'      # Purge access server receive data buffer
+PURGE_TRANSMIT_BUFFER = b'\x02'     # Purge access server transmit data buffer
+PURGE_BOTH_BUFFERS = b'\x03'        # Purge both the access server receive data
+                                    # buffer and the access server transmit data buffer
+
+
+
+
+SET_CONTROL_REQ_FLOW_SETTING = b'\x00'        # Request Com Port Flow Control Setting (outbound/both)
+SET_CONTROL_USE_NO_FLOW_CONTROL = b'\x01'     # Use No Flow Control (outbound/both)
+SET_CONTROL_USE_SW_FLOW_CONTROL = b'\x02'     # Use XON/XOFF Flow Control (outbound/both)
+SET_CONTROL_USE_HW_FLOW_CONTROL = b'\x03'     # Use HARDWARE Flow Control (outbound/both)
+SET_CONTROL_REQ_BREAK_STATE = b'\x04'         # Request BREAK State
+SET_CONTROL_BREAK_ON = b'\x05'                # Set BREAK State ON
+SET_CONTROL_BREAK_OFF = b'\x06'               # Set BREAK State OFF
+SET_CONTROL_REQ_DTR = b'\x07'                 # Request DTR Signal State
+SET_CONTROL_DTR_ON = b'\x08'                  # Set DTR Signal State ON
+SET_CONTROL_DTR_OFF = b'\x09'                 # Set DTR Signal State OFF
+SET_CONTROL_REQ_RTS = b'\x0a'                 # Request RTS Signal State
+SET_CONTROL_RTS_ON = b'\x0b'                  # Set RTS Signal State ON
+SET_CONTROL_RTS_OFF = b'\x0c'                 # Set RTS Signal State OFF
+SET_CONTROL_REQ_FLOW_SETTING_IN = b'\x0d'     # Request Com Port Flow Control Setting (inbound)
+SET_CONTROL_USE_NO_FLOW_CONTROL_IN = b'\x0e'  # Use No Flow Control (inbound)
+SET_CONTROL_USE_SW_FLOW_CONTOL_IN = b'\x0f'   # Use XON/XOFF Flow Control (inbound)
+SET_CONTROL_USE_HW_FLOW_CONTOL_IN = b'\x10'   # Use HARDWARE Flow Control (inbound)
+SET_CONTROL_USE_DCD_FLOW_CONTROL = b'\x11'    # Use DCD Flow Control (outbound/both)
+SET_CONTROL_USE_DTR_FLOW_CONTROL = b'\x12'    # Use DTR Flow Control (inbound)
+SET_CONTROL_USE_DSR_FLOW_CONTROL = b'\x13'    # Use DSR Flow Control (outbound/both)
+
+LINESTATE_MASK_TIMEOUT = 128        # Time-out Error
+LINESTATE_MASK_SHIFTREG_EMPTY = 64  # Transfer Shift Register Empty
+LINESTATE_MASK_TRANSREG_EMPTY = 32  # Transfer Holding Register Empty
+LINESTATE_MASK_BREAK_DETECT = 16    # Break-detect Error
+LINESTATE_MASK_FRAMING_ERROR = 8    # Framing Error
+LINESTATE_MASK_PARTIY_ERROR = 4     # Parity Error
+LINESTATE_MASK_OVERRUN_ERROR = 2    # Overrun Error
+LINESTATE_MASK_DATA_READY = 1       # Data Ready
+
+MODEMSTATE_MASK_CD = 128            # Receive Line Signal Detect (also known as Carrier Detect)
+MODEMSTATE_MASK_RI = 64             # Ring Indicator
+MODEMSTATE_MASK_DSR = 32            # Data-Set-Ready Signal State
+MODEMSTATE_MASK_CTS = 16            # Clear-To-Send Signal State
+MODEMSTATE_MASK_CD_CHANGE = 8       # Delta Receive Line Signal Detect
+MODEMSTATE_MASK_RI_CHANGE = 4       # Trailing-edge Ring Detector
+MODEMSTATE_MASK_DSR_CHANGE = 2      # Delta Data-Set-Ready
+MODEMSTATE_MASK_CTS_CHANGE = 1      # Delta Clear-To-Send
+
+PURGE_RECEIVE_BUFFER = b'\x01'      # Purge access server receive data buffer
+PURGE_TRANSMIT_BUFFER = b'\x02'     # Purge access server transmit data buffer
+PURGE_BOTH_BUFFERS = b'\x03'        # Purge both the access server receive data
+                                    # buffer and the access server transmit data buffer
+
+
+RFC2217_PARITY_MAP = {
+    serial.PARITY_NONE: 1,
+    serial.PARITY_ODD: 2,
+    serial.PARITY_EVEN: 3,
+    serial.PARITY_MARK: 4,
+    serial.PARITY_SPACE: 5,
+}
+RFC2217_REVERSE_PARITY_MAP = dict((v, k) for k, v in RFC2217_PARITY_MAP.items())
+
+RFC2217_STOPBIT_MAP = {
+    serial.STOPBITS_ONE: 1,
+    serial.STOPBITS_ONE_POINT_FIVE: 3,
+    serial.STOPBITS_TWO: 2,
+}
+RFC2217_REVERSE_STOPBIT_MAP = dict((v, k) for k, v in RFC2217_STOPBIT_MAP.items())
+
+# Telnet filter states
+M_NORMAL = 0
+M_IAC_SEEN = 1
+M_NEGOTIATE = 2
+
+# TelnetOption and TelnetSubnegotiation states
+REQUESTED = 'REQUESTED'
+ACTIVE = 'ACTIVE'
+INACTIVE = 'INACTIVE'
+REALLY_INACTIVE = 'REALLY_INACTIVE'
+
+
+class TelnetOption(object):
+    """Manage a single telnet option, keeps track of DO/DONT WILL/WONT."""
+
+    def __init__(self, connection, name, option, send_yes, send_no, ack_yes,
+                 ack_no, initial_state, activation_callback=None):
+        """\
+        Initialize option.
+        :param connection: connection used to transmit answers
+        :param name: a readable name for debug outputs
+        :param send_yes: what to send when option is to be enabled.
+        :param send_no: what to send when option is to be disabled.
+        :param ack_yes: what to expect when remote agrees on option.
+        :param ack_no: what to expect when remote disagrees on option.
+        :param initial_state: options initialized with REQUESTED are tried to
+            be enabled on startup. use INACTIVE for all others.
+        """
+        self.connection = connection
+        self.name = name
+        self.option = option
+        self.send_yes = send_yes
+        self.send_no = send_no
+        self.ack_yes = ack_yes
+        self.ack_no = ack_no
+        self.state = initial_state
+        self.active = False
+        self.activation_callback = activation_callback
+
+    def __repr__(self):
+        """String for debug outputs"""
+        return "{o.name}:{o.active}({o.state})".format(o=self)
+
+    def process_incoming(self, command):
+        """\
+        A DO/DONT/WILL/WONT was received for this option, update state and
+        answer when needed.
+        """
+        if command == self.ack_yes:
+            if self.state is REQUESTED:
+                self.state = ACTIVE
+                self.active = True
+                if self.activation_callback is not None:
+                    self.activation_callback()
+            elif self.state is ACTIVE:
+                pass
+            elif self.state is INACTIVE:
+                self.state = ACTIVE
+                self.connection.telnet_send_option(self.send_yes, self.option)
+                self.active = True
+                if self.activation_callback is not None:
+                    self.activation_callback()
+            elif self.state is REALLY_INACTIVE:
+                self.connection.telnet_send_option(self.send_no, self.option)
+            else:
+                raise ValueError('option in illegal state {!r}'.format(self))
+        elif command == self.ack_no:
+            if self.state is REQUESTED:
+                self.state = INACTIVE
+                self.active = False
+            elif self.state is ACTIVE:
+                self.state = INACTIVE
+                self.connection.telnet_send_option(self.send_no, self.option)
+                self.active = False
+            elif self.state is INACTIVE:
+                pass
+            elif self.state is REALLY_INACTIVE:
+                pass
+            else:
+                raise ValueError('option in illegal state {!r}'.format(self))
+
+
+class TelnetSubnegotiation(object):
+    """\
+    A object to handle subnegotiation of options. In this case actually
+    sub-sub options for RFC 2217. It is used to track com port options.
+    """
+
+    def __init__(self, connection, name, option, ack_option=None):
+        if ack_option is None:
+            ack_option = option
+        self.connection = connection
+        self.name = name
+        self.option = option
+        self.value = None
+        self.ack_option = ack_option
+        self.state = INACTIVE
+
+    def __repr__(self):
+        """String for debug outputs."""
+        return "{sn.name}:{sn.state}".format(sn=self)
+
+    def set(self, value):
+        """\
+        Request a change of the value. a request is sent to the server. if
+        the client needs to know if the change is performed he has to check the
+        state of this object.
+        """
+        self.value = value
+        self.state = REQUESTED
+        self.connection.rfc2217_send_subnegotiation(self.option, self.value)
+        if self.connection.logger:
+            self.connection.logger.debug("SB Requesting {} -> {!r}".format(self.name, self.value))
+
+    def is_ready(self):
+        """\
+        Check if answer from server has been received. when server rejects
+        the change, raise a ValueError.
+        """
+        if self.state == REALLY_INACTIVE:
+            raise ValueError("remote rejected value for option {!r}".format(self.name))
+        return self.state == ACTIVE
+    # add property to have a similar interface as TelnetOption
+    active = property(is_ready)
 
     def wait(self, timeout=3):
         """\
@@ -29,11 +313,24 @@ class TelnetSubnegotiation(rfc2217.TelnetSubnegotiation):
         else:
             raise SerialException("timeout while waiting for option {!r}".format(self.name))
 
+    def check_answer(self, suboption):
+        """\
+        Check an incoming subnegotiation block. The parameter already has
+        cut off the header like sub option number and com port option value.
+        """
+        if self.value == suboption[:len(self.value)]:
+            self.state = ACTIVE
+        else:
+            # error propagation done in is_ready
+            self.state = REALLY_INACTIVE
+        if self.connection.logger:
+            self.connection.logger.debug("SB Answer {} -> {!r} -> {}".format(self.name, suboption, self.state))
+
 
 class Serial(SerialBase):
-    __doc__ = rfc2217.Serial.__doc__
 
-    BAUDRATES = rfc2217.Serial.BAUDRATES
+    BAUDRATES = (50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800,
+                 9600, 19200, 38400, 57600, 115200)
 
     def __init__(self, *args, **kwargs):
         self._socket = None
@@ -231,7 +528,7 @@ class Serial(SerialBase):
             for option, values in parse.parse_qs(parts.query, True).items():
                 if option == 'logging':
                     logging.basicConfig()   # XXX is that good to call it here?
-                    self.logger = logging.getLogger('pySerial.rfc2217')
+                    self.logger = logging.getLogger('gserial.rfc2217')
                     self.logger.setLevel(LOGGER_LEVELS[values[0]])
                     self.logger.debug('enabled logging')
                 elif option == 'ign_set_control':
