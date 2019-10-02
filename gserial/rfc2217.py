@@ -1,10 +1,14 @@
+from serial.rfc2217 import *
 
 import socket
 import struct
 import logging
-import urllib.parse
+import threading
+from queue import Queue
+from urllib import parse
 
-import gevent.queue
+#import gevent.socket
+#import gevent.queue
 
 from serial import SerialBase, SerialException, to_bytes, \
     iterbytes, portNotOpenError, Timeout, rfc2217
@@ -45,8 +49,9 @@ class Serial(SerialBase):
             raise SerialException("Port must be configured before it can be used.")
         if self.is_open:
             raise SerialException("Port is already open.")
+        addr = self.from_url(self.portstr)
         try:
-            self._socket = socket.create_connection(self.from_url(self.portstr), timeout=5)  # XXX good value?
+            self._socket = socket.create_connection(addr, timeout=5)
             self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except Exception as msg:
             self._socket = None
@@ -54,7 +59,7 @@ class Serial(SerialBase):
 
         # use a thread save queue as buffer. it also simplifies implementing
         # the read timeout
-        self._read_buffer = Queue.Queue()
+        self._read_buffer = Queue()
         # to ensure that user writes does not interfere with internal
         # telnet/rfc2217 options establish a lock
         self._write_lock = threading.Lock()
@@ -195,7 +200,7 @@ class Serial(SerialBase):
         extract host and port from an URL string, other settings are extracted
         an stored in instance
         """
-        parts = urllib.parse.urlsplit(url)
+        parts = parse.urlsplit(url)
         if parts.scheme != "rfc2217":
             raise SerialException(
                 'expected a string in the form '
@@ -203,7 +208,7 @@ class Serial(SerialBase):
                 'not starting with rfc2217:// ({!r})'.format(parts.scheme))
         try:
             # process options now, directly altering self
-            for option, values in urllib.parse.parse_qs(parts.query, True).items():
+            for option, values in parse.parse_qs(parts.query, True).items():
                 if option == 'logging':
                     logging.basicConfig()   # XXX is that good to call it here?
                     self.logger = logging.getLogger('pySerial.rfc2217')
