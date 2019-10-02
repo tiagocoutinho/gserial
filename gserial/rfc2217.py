@@ -3,6 +3,7 @@ import logging
 import telnetlib
 from urllib import parse
 
+import gevent
 from gevent import event, queue, socket, lock, spawn, sleep
 
 import serial
@@ -109,9 +110,6 @@ PURGE_RECEIVE_BUFFER = b'\x01'      # Purge access server receive data buffer
 PURGE_TRANSMIT_BUFFER = b'\x02'     # Purge access server transmit data buffer
 PURGE_BOTH_BUFFERS = b'\x03'        # Purge both the access server receive data
                                     # buffer and the access server transmit data buffer
-
-
-
 
 SET_CONTROL_REQ_FLOW_SETTING = b'\x00'        # Request Com Port Flow Control Setting (outbound/both)
 SET_CONTROL_USE_NO_FLOW_CONTROL = b'\x01'     # Use No Flow Control (outbound/both)
@@ -271,6 +269,7 @@ class TelnetSubnegotiation(object):
         self.value = None
         self.ack_option = ack_option
         self.state = INACTIVE
+        self.state_event = event.Event()
 
     def __repr__(self):
         """String for debug outputs."""
@@ -284,6 +283,7 @@ class TelnetSubnegotiation(object):
         """
         self.value = value
         self.state = REQUESTED
+        self.state_event.clear()
         self.connection.rfc2217_send_subnegotiation(self.option, self.value)
         if self.connection.logger:
             self.connection.logger.debug("SB Requesting {} -> {!r}".format(self.name, self.value))
@@ -305,13 +305,8 @@ class TelnetSubnegotiation(object):
         can also throw a value error when the answer from the server does not
         match the value sent.
         """
-        timeout_timer = Timeout(timeout)
-        while not timeout_timer.expired():
-            sleep(0.05)    # prevent 100% CPU load
-            if self.is_ready():
-                break
-        else:
-            raise SerialException("timeout while waiting for option {!r}".format(self.name))
+        with gevent.Timeout(timeout, SerialException("timeout while waiting for option {!r}".format(self.name))):
+            self.state_event.wait()
 
     def check_answer(self, suboption):
         """\
@@ -320,9 +315,11 @@ class TelnetSubnegotiation(object):
         """
         if self.value == suboption[:len(self.value)]:
             self.state = ACTIVE
+            self.state_event.set()
         else:
             # error propagation done in is_ready
             self.state = REALLY_INACTIVE
+            self.state_event.clear()
         if self.connection.logger:
             self.connection.logger.debug("SB Answer {} -> {!r} -> {}".format(self.name, suboption, self.state))
 
