@@ -1,20 +1,34 @@
 from serial.rfc2217 import *
 
-import socket
 import struct
 import logging
-import threading
-from queue import Queue
 from urllib import parse
 
-#import gevent.socket
-#import gevent.queue
+from gevent import queue, socket, lock, spawn, sleep
 
 from serial import SerialBase, SerialException, to_bytes, \
     iterbytes, portNotOpenError, Timeout, rfc2217
 
 
 log = logging.getLogger('gserial.rfc2217')
+
+
+class TelnetSubnegotiation(rfc2217.TelnetSubnegotiation):
+
+    def wait(self, timeout=3):
+        """\
+        Wait until the subnegotiation has been acknowledged or timeout. It
+        can also throw a value error when the answer from the server does not
+        match the value sent.
+        """
+        timeout_timer = Timeout(timeout)
+        while not timeout_timer.expired():
+            sleep(0.05)    # prevent 100% CPU load
+            if self.is_ready():
+                break
+        else:
+            raise SerialException("timeout while waiting for option {!r}".format(self.name))
+
 
 class Serial(SerialBase):
     __doc__ = rfc2217.Serial.__doc__
@@ -37,6 +51,17 @@ class Serial(SerialBase):
         self._rfc2217_options = None
         self._read_buffer = None
         super(Serial, self).__init__(*args, **kwargs)
+
+    def send_break(self, duration=0.25):
+        """\
+        Send break condition. Timed, returns to idle state after given
+        duration.
+        """
+        if not self.is_open:
+            raise portNotOpenError
+        self.break_condition = True
+        gevent.sleep(duration)
+        self.break_condition = False
 
     def open(self):
         """\
@@ -61,10 +86,10 @@ class Serial(SerialBase):
 
         # use a thread save queue as buffer. it also simplifies implementing
         # the read timeout
-        self._read_buffer = Queue()
+        self._read_buffer = queue.Queue()
         # to ensure that user writes does not interfere with internal
         # telnet/rfc2217 options establish a lock
-        self._write_lock = threading.Lock()
+        self._write_lock = lock.RLock()
         # name the following separately so that, below, a check can be easily done
         mandadory_options = [
             TelnetOption(self, 'we-BINARY', BINARY, WILL, WONT, DO, DONT, INACTIVE),
@@ -101,10 +126,7 @@ class Serial(SerialBase):
         self._remote_suspend_flow = False
 
         self.is_open = True
-        self._thread = threading.Thread(target=self._telnet_read_loop)
-        self._thread.setDaemon(True)
-        self._thread.setName('pySerial RFC 2217 reader thread for {}'.format(self._port))
-        self._thread.start()
+        self._thread = spawn(self._telnet_read_loop)
 
         try:    # must clean-up if open fails
             # negotiate Telnet/RFC 2217 -> send initial requests
@@ -114,7 +136,7 @@ class Serial(SerialBase):
             # now wait until important options are negotiated
             timeout = Timeout(self._network_timeout)
             while not timeout.expired():
-                time.sleep(0.05)    # prevent 100% CPU load
+                sleep(0.05)    # prevent 100% CPU load
                 if sum(o.active for o in mandadory_options) == sum(o.state != INACTIVE for o in mandadory_options):
                     break
             else:
@@ -161,13 +183,12 @@ class Serial(SerialBase):
         self.logger.debug("Negotiating settings: {}".format(items))
         timeout = Timeout(self._network_timeout)
         while not timeout.expired():
-            time.sleep(0.05)    # prevent 100% CPU load
+            sleep(0.05)    # prevent 100% CPU load
             if sum(o.active for o in items) == len(items):
                 break
         else:
             raise SerialException("Remote does not accept parameter change (RFC2217): {!r}".format(items))
         self.logger.info("Negotiated settings: {}".format(items))
-
         if self._rtscts and self._xonxoff:
             raise ValueError('xonxoff and rtscts together are not supported')
         elif self._rtscts:
@@ -191,7 +212,7 @@ class Serial(SerialBase):
             self._thread.join(7)  # XXX more than socket timeout
             self._thread = None
             # in case of quick reconnects, give the server some time
-            time.sleep(0.3)
+            sleep(0.3)
         self._socket = None
 
     def from_url(self, url):
@@ -270,11 +291,10 @@ class Serial(SerialBase):
         """
         if not self.is_open:
             raise portNotOpenError
-        with self._write_lock:
-            try:
-                self._socket.sendall(to_bytes(data).replace(IAC, IAC_DOUBLED))
-            except socket.error as e:
-                raise SerialException("connection failed (socket error): {}".format(e))
+        try:
+            self._internal_raw_write(to_bytes(data).replace(IAC, IAC_DOUBLED))
+        except socket.error as e:
+            raise SerialException("connection failed (socket error): {}".format(e))
         return len(data)
 
     def reset_input_buffer(self):
@@ -378,6 +398,7 @@ class Serial(SerialBase):
                     self.logger.debug("socket error in reader thread: {}".format(e))
                     self._read_buffer.put(None)
                     break
+                self.logger.debug('RECV %r', data)
                 if not data:
                     self._read_buffer.put(None)
                     break  # lost connection
@@ -482,6 +503,7 @@ class Serial(SerialBase):
     def _internal_raw_write(self, data):
         """internal socket write with no data escaping. used to send telnet stuff."""
         with self._write_lock:
+            self.logger.debug('SEND %r', data)
             self._socket.sendall(data)
 
     def telnet_send_option(self, action, option):
@@ -510,7 +532,7 @@ class Serial(SerialBase):
             # answers are ignored when option is set. compatibility mode for
             # servers that answer, but not the expected one... (or no answer
             # at all) i.e. sredird
-            time.sleep(0.1)  # this helps getting the unit tests passed
+            sleep(0.1)  # this helps getting the unit tests passed
         else:
             item.wait(self._network_timeout)  # wait for acknowledge from the server
 
@@ -553,4 +575,14 @@ class Serial(SerialBase):
         else:
             # never received a notification from the server
             raise SerialException("remote sends no NOTIFY_MODEMSTATE")
+
+
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG,
+        format='%(threadName)-12s %(levelname)s %(asctime)-15s %(name)s: %(message)s')
+    s = Serial('rfc2217://localhost:2217')
+    message = b'bla ble bli\n'
+    s.write(message)
+    sleep(0.1)
+    s.read_all() == message
 
