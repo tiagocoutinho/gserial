@@ -12,3 +12,7 @@ del _fposix
 # force Serial object to use gevent select library instead!
 
 from gevent import select
+
+
+# TODO: serial.serialutil.Serial.send_break() uses time.sleep()
+#       so it needs to be hacked!
