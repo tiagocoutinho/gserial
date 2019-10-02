@@ -14,6 +14,8 @@ from serial import SerialBase, SerialException, to_bytes, \
     iterbytes, portNotOpenError, Timeout, rfc2217
 
 
+log = logging.getLogger('gserial.rfc2217')
+
 class Serial(SerialBase):
     __doc__ = rfc2217.Serial.__doc__
 
@@ -26,7 +28,7 @@ class Serial(SerialBase):
         self._modemstate_timeout = Timeout(-1)
         self._remote_suspend_flow = False
         self._write_lock = None
-        self.logger = None
+        self.logger = log
         self._ignore_set_control_answer = False
         self._poll_modem_state = False
         self._network_timeout = 3
@@ -41,7 +43,6 @@ class Serial(SerialBase):
         Open port with current settings. This may throw a SerialException
         if the port cannot be opened.
         """
-        self.logger = None
         self._ignore_set_control_answer = False
         self._poll_modem_state = False
         self._network_timeout = 3
@@ -50,6 +51,7 @@ class Serial(SerialBase):
         if self.is_open:
             raise SerialException("Port is already open.")
         addr = self.from_url(self.portstr)
+        self.logger = log.getChild(self.portstr)
         try:
             self._socket = socket.create_connection(addr, timeout=5)
             self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -118,8 +120,7 @@ class Serial(SerialBase):
             else:
                 raise SerialException(
                     "Remote does not seem to support RFC2217 or BINARY mode {!r}".format(mandadory_options))
-            if self.logger:
-                self.logger.info("Negotiated options: {}".format(self._telnet_options))
+            self.logger.info("Negotiated options: {}".format(self._telnet_options))
 
             # fine, go on, set RFC 2271 specific things
             self._reconfigure_port()
@@ -157,8 +158,7 @@ class Serial(SerialBase):
 
         # and now wait until parameters are active
         items = self._rfc2217_port_settings.values()
-        if self.logger:
-            self.logger.debug("Negotiating settings: {}".format(items))
+        self.logger.debug("Negotiating settings: {}".format(items))
         timeout = Timeout(self._network_timeout)
         while not timeout.expired():
             time.sleep(0.05)    # prevent 100% CPU load
@@ -166,8 +166,7 @@ class Serial(SerialBase):
                 break
         else:
             raise SerialException("Remote does not accept parameter change (RFC2217): {!r}".format(items))
-        if self.logger:
-            self.logger.info("Negotiated settings: {}".format(items))
+        self.logger.info("Negotiated settings: {}".format(items))
 
         if self._rtscts and self._xonxoff:
             raise ValueError('xonxoff and rtscts together are not supported')
@@ -303,8 +302,7 @@ class Serial(SerialBase):
         """
         if not self.is_open:
             raise portNotOpenError
-        if self.logger:
-            self.logger.info('set BREAK to {}'.format('active' if self._break_state else 'inactive'))
+        self.logger.info('set BREAK to {}'.format('active' if self._break_state else 'inactive'))
         if self._break_state:
             self.rfc2217_set_control(SET_CONTROL_BREAK_ON)
         else:
@@ -314,8 +312,7 @@ class Serial(SerialBase):
         """Set terminal status line: Request To Send."""
         if not self.is_open:
             raise portNotOpenError
-        if self.logger:
-            self.logger.info('set RTS to {}'.format('active' if self._rts_state else 'inactive'))
+        self.logger.info('set RTS to {}'.format('active' if self._rts_state else 'inactive'))
         if self._rts_state:
             self.rfc2217_set_control(SET_CONTROL_RTS_ON)
         else:
@@ -325,8 +322,7 @@ class Serial(SerialBase):
         """Set terminal status line: Data Terminal Ready."""
         if not self.is_open:
             raise portNotOpenError
-        if self.logger:
-            self.logger.info('set DTR to {}'.format('active' if self._dtr_state else 'inactive'))
+        self.logger.info('set DTR to {}'.format('active' if self._dtr_state else 'inactive'))
         if self._dtr_state:
             self.rfc2217_set_control(SET_CONTROL_DTR_ON)
         else:
@@ -379,8 +375,7 @@ class Serial(SerialBase):
                     continue
                 except socket.error as e:
                     # connection fails -> terminate loop
-                    if self.logger:
-                        self.logger.debug("socket error in reader thread: {}".format(e))
+                    self.logger.debug("socket error in reader thread: {}".format(e))
                     self._read_buffer.put(None)
                     break
                 if not data:
@@ -429,16 +424,14 @@ class Serial(SerialBase):
                         mode = M_NORMAL
         finally:
             self._thread = None
-            if self.logger:
-                self.logger.debug("read thread terminated")
+            self.logger.debug("read thread terminated")
 
     # - incoming telnet commands and options
 
     def _telnet_process_command(self, command):
         """Process commands other than DO, DONT, WILL, WONT."""
         # Currently none. RFC2217 only uses negotiation and subnegotiation.
-        if self.logger:
-            self.logger.warning("ignoring Telnet command: {!r}".format(command))
+        self.logger.warning("ignoring Telnet command: {!r}".format(command))
 
     def _telnet_negotiate_option(self, command, option):
         """Process incoming DO, DONT, WILL, WONT."""
@@ -456,20 +449,17 @@ class Serial(SerialBase):
             # only answer to positive requests and deny them
             if command == WILL or command == DO:
                 self.telnet_send_option((DONT if command == WILL else WONT), option)
-                if self.logger:
-                    self.logger.warning("rejected Telnet option: {!r}".format(option))
+                self.logger.warning("rejected Telnet option: {!r}".format(option))
 
     def _telnet_process_subnegotiation(self, suboption):
         """Process subnegotiation, the data between IAC SB and IAC SE."""
         if suboption[0:1] == COM_PORT_OPTION:
             if suboption[1:2] == SERVER_NOTIFY_LINESTATE and len(suboption) >= 3:
                 self._linestate = ord(suboption[2:3])  # ensure it is a number
-                if self.logger:
-                    self.logger.info("NOTIFY_LINESTATE: {}".format(self._linestate))
+                self.logger.info("NOTIFY_LINESTATE: {}".format(self._linestate))
             elif suboption[1:2] == SERVER_NOTIFY_MODEMSTATE and len(suboption) >= 3:
                 self._modemstate = ord(suboption[2:3])  # ensure it is a number
-                if self.logger:
-                    self.logger.info("NOTIFY_MODEMSTATE: {}".format(self._modemstate))
+                self.logger.info("NOTIFY_MODEMSTATE: {}".format(self._modemstate))
                 # update time when we think that a poll would make sense
                 self._modemstate_timeout.restart(0.3)
             elif suboption[1:2] == FLOWCONTROL_SUSPEND:
@@ -483,11 +473,9 @@ class Serial(SerialBase):
                         item.check_answer(bytes(suboption[2:]))
                         break
                 else:
-                    if self.logger:
-                        self.logger.warning("ignoring COM_PORT_OPTION: {!r}".format(suboption))
+                    self.logger.warning("ignoring COM_PORT_OPTION: {!r}".format(suboption))
         else:
-            if self.logger:
-                self.logger.warning("ignoring subnegotiation: {!r}".format(suboption))
+            self.logger.warning("ignoring subnegotiation: {!r}".format(suboption))
 
     # - outgoing telnet commands and options
 
@@ -543,27 +531,24 @@ class Serial(SerialBase):
         """
         # active modem state polling enabled? is the value fresh enough?
         if self._poll_modem_state and self._modemstate_timeout.expired():
-            if self.logger:
-                self.logger.debug('polling modem state')
+            self.logger.debug('polling modem state')
             # when it is older, request an update
             self.rfc2217_send_subnegotiation(NOTIFY_MODEMSTATE)
             timeout = Timeout(self._network_timeout)
             while not timeout.expired():
-                time.sleep(0.05)    # prevent 100% CPU load
+                gevent.sleep(0.05)    # prevent 100% CPU load
                 # when expiration time is updated, it means that there is a new
                 # value
                 if not self._modemstate_timeout.expired():
                     break
             else:
-                if self.logger:
-                    self.logger.warning('poll for modem state failed')
+                self.logger.warning('poll for modem state failed')
             # even when there is a timeout, do not generate an error just
             # return the last known value. this way we can support buggy
             # servers that do not respond to polls, but send automatic
             # updates.
         if self._modemstate is not None:
-            if self.logger:
-                self.logger.debug('using cached modem state')
+            self.logger.debug('using cached modem state')
             return self._modemstate
         else:
             # never received a notification from the server
