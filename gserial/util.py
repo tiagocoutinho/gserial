@@ -60,8 +60,8 @@ def to_bytes(seq):
         return bytes(seq)
     elif isinstance(seq, memoryview):
         return seq.tobytes()
-    elif isinstance(seq, unicode):
-        raise TypeError('unicode strings are not supported, please encode to bytes: {!r}'.format(seq))
+    elif isinstance(seq, str):
+        raise TypeError('str is not supported, please encode to bytes: {!r}'.format(seq))
     else:
         # handle list of integers and bytes (one or more items) for Python 2 and 3
         return bytes(bytearray(seq))

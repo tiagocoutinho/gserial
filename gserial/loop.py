@@ -10,6 +10,9 @@ from gserial.util import to_bytes, iter_bytes
 from gserial import SerialException, writeTimeoutError, portNotOpenError
 
 
+log = logging.getLogger('gserial.loop')
+
+
 # map log level names to constants. used in from_url()
 LOGGER_LEVELS = {
     'debug': logging.DEBUG,
@@ -28,7 +31,7 @@ class Serial(SerialBase):
     def __init__(self, *args, **kwargs):
         self.buffer_size = 4096
         self.queue = None
-        self.logger = None
+        self.logger = log.getChild('Loopback()')
         self._cancel_write = False
         super(Serial, self).__init__(*args, **kwargs)
 
@@ -39,7 +42,6 @@ class Serial(SerialBase):
         """
         if self.is_open:
             raise SerialException("Port is already open.")
-        self.logger = None
         self.queue = gevent.queue.Queue(self.buffer_size)
 
         if self._port is None:
@@ -47,7 +49,6 @@ class Serial(SerialBase):
         # not that there is anything to open, but the function applies the
         # options found in the URL
         self.from_url(self.port)
-
         # not that there anything to configure...
         self._reconfigure_port()
         # all things set up get, now a clean start

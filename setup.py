@@ -4,6 +4,8 @@
 
 from setuptools import setup, find_packages
 
+
+
 setup(
     author="Tiago Coutinho",
     author_email='coutinhotiago@gmail.com',
@@ -20,6 +22,14 @@ setup(
     ],
     description="A gevent friendly serial line",
     install_requires=['gevent', 'pyserial'],
+    extras_require={
+        'gs2n': ['pyyaml', 'toml']
+    },
+    entry_points={
+        'console_scripts': [
+            'gs2n=gserial.rfc2217.server:main [gs2n]'
+        ]
+    },
     license="GPL",
     long_description="A gevent friendly serial line",
     keywords='pyserial, gevent',
