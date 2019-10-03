@@ -35,4 +35,4 @@ setup(
     name='gserial',
     packages=find_packages(include=['gserial']),
     url='https://github.com/tiagocoutinho/gserial',
-    version='0.1.0')
+    version='0.2.0')

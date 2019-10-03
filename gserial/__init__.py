@@ -7,7 +7,7 @@ del _serial
 
 from .base import SerialBase
 
-VERSION = '0.1.0'
+__version__ = '0.2.0'
 
 import os
 if os.name == 'posix':
