@@ -188,7 +188,7 @@ class TelnetOption(object):
     """Manage a single telnet option, keeps track of DO/DONT WILL/WONT."""
 
     def __init__(self, connection, name, option, send_yes, send_no, ack_yes,
-                 ack_no, initial_state, activation_callback=None):
+                 ack_no, initial_state):
         """\
         Initialize option.
         :param connection: connection used to transmit answers
@@ -210,7 +210,6 @@ class TelnetOption(object):
         self.state = initial_state
         self.active = False
         self.active_event = event.Event()
-        self.activation_callback = activation_callback
 
     def __repr__(self):
         """String for debug outputs"""
@@ -226,8 +225,6 @@ class TelnetOption(object):
                 self.state = ACTIVE
                 self.active = True
                 self.active_event.set()
-                if self.activation_callback is not None:
-                    self.activation_callback()
             elif self.state is ACTIVE:
                 pass
             elif self.state is INACTIVE:
@@ -235,8 +232,6 @@ class TelnetOption(object):
                 self.connection.telnet_send_option(self.send_yes, self.option)
                 self.active = True
                 self.active_event.set()
-                if self.activation_callback is not None:
-                    self.activation_callback()
             elif self.state is REALLY_INACTIVE:
                 self.connection.telnet_send_option(self.send_no, self.option)
             else:
