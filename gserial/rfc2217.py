@@ -763,21 +763,22 @@ class Serial(SerialBase):
     def _telnet_process_subnegotiation(self, suboption):
         """Process subnegotiation, the data between IAC SB and IAC SE."""
         if suboption[0:1] == COM_PORT_OPTION:
-            if suboption[1:2] == SERVER_NOTIFY_LINESTATE and len(suboption) >= 3:
+            option = suboption[1:2]
+            if option == SERVER_NOTIFY_LINESTATE and len(suboption) >= 3:
                 self._linestate = ord(suboption[2:3])  # ensure it is a number
                 self.logger.info("NOTIFY_LINESTATE: {}".format(self._linestate))
-            elif suboption[1:2] == SERVER_NOTIFY_MODEMSTATE and len(suboption) >= 3:
+            elif option == SERVER_NOTIFY_MODEMSTATE and len(suboption) >= 3:
                 self._modemstate = ord(suboption[2:3])  # ensure it is a number
                 self.logger.info("NOTIFY_MODEMSTATE: {}".format(self._modemstate))
                 # update time when we think that a poll would make sense
                 self._modemstate_timeout.restart(0.3)
-            elif suboption[1:2] == FLOWCONTROL_SUSPEND:
+            elif option == FLOWCONTROL_SUSPEND:
                 self._remote_suspend_flow = True
-            elif suboption[1:2] == FLOWCONTROL_RESUME:
+            elif option == FLOWCONTROL_RESUME:
                 self._remote_suspend_flow = False
             else:
                 for item in self._rfc2217_options.values():
-                    if item.ack_option == suboption[1:2]:
+                    if item.ack_option == option:
                         #~ print "processing COM_PORT_OPTION: %r" % list(suboption[1:])
                         item.check_answer(bytes(suboption[2:]))
                         break
