@@ -2,14 +2,16 @@ import struct
 import logging
 import functools
 import telnetlib
-from urllib import parse
+import urllib.parse
 
-import gevent
-from gevent import event, queue, socket, lock, spawn, sleep
+import gevent.lock
+import gevent.event
+import gevent.queue
+import gevent.socket
 
 import serial
-from serial import SerialBase, SerialException, to_bytes, \
-    iterbytes, portNotOpenError, Timeout
+
+from gserial.util import Strip, iter_bytes, to_bytes
 
 
 log = logging.getLogger('gserial.rfc2217')
@@ -210,7 +212,7 @@ class TelnetOption(object):
         self.ack_no = ack_no
         self.state = initial_state
         self.active = False
-        self.active_event = event.Event()
+        self.active_event = gevent.event.Event()
 
     def __repr__(self):
         """String for debug outputs"""
@@ -270,7 +272,7 @@ class TelnetSubnegotiation(object):
         self.value = None
         self.ack_option = ack_option
         self.state = INACTIVE
-        self.active_event = event.Event()
+        self.active_event = gevent.event.Event()
 
     def __repr__(self):
         """String for debug outputs."""
@@ -305,7 +307,7 @@ class TelnetSubnegotiation(object):
         can also throw a value error when the answer from the server does not
         match the value sent.
         """
-        with gevent.Timeout(timeout, SerialException("timeout while waiting for option {!r}".format(self.name))):
+        with gevent.Timeout(timeout, serial.SerialException("timeout while waiting for option {!r}".format(self.name))):
             self.active_event.wait()
 
     def check_answer(self, suboption):
@@ -327,12 +329,12 @@ def ensure_open(f):
     @functools.wraps(f)
     def wrapper(self, *args, **kwargs):
         if not self.is_open:
-            raise portNotOpenError
+            raise serial.portNotOpenError
         return f(self, *args, **kwargs)
     return wrapper
 
 
-class Serial(SerialBase):
+class Serial(serial.SerialBase):
 
     BAUDRATES = (50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800,
                  9600, 19200, 38400, 57600, 115200)
@@ -341,7 +343,7 @@ class Serial(SerialBase):
         self._socket = None
         self._linestate = 0
         self._modemstate = None
-        self._modemstate_timeout = Timeout(-1)
+        self._modemstate_timeout = serial.Timeout(-1)
         self._remote_suspend_flow = False
         self._write_lock = None
         self.logger = log
@@ -373,24 +375,25 @@ class Serial(SerialBase):
         self._poll_modem_state = False
         self._network_timeout = 3
         if self._port is None:
-            raise SerialException("Port must be configured before it can be used.")
+            raise serial.SerialException("Port must be configured before it can be used.")
         if self.is_open:
-            raise SerialException("Port is already open.")
+            raise serial.SerialException("Port is already open.")
         addr = self.from_url(self.portstr)
-        self.logger = log.getChild(self.portstr)
+        self.logger = logging.getLogger('RFC2217({}:{})'.format(*addr))
         try:
-            self._socket = socket.create_connection(addr, timeout=5)
-            self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self._socket = gevent.socket.create_connection(addr, timeout=5)
+            self._socket.setsockopt(gevent.socket.IPPROTO_TCP,
+                                    gevent.socket.TCP_NODELAY, 1)
         except Exception as msg:
             self._socket = None
-            raise SerialException("Could not open port {}: {}".format(self.portstr, msg))
+            raise serial.SerialException("Could not open port {}: {}".format(self.portstr, msg))
 
         # use a thread save queue as buffer. it also simplifies implementing
         # the read timeout
-        self._read_buffer = queue.Queue()
+        self._read_buffer = gevent.queue.Queue()
         # to ensure that user writes does not interfere with internal
         # telnet/rfc2217 options establish a lock
-        self._write_lock = lock.RLock()
+        self._write_lock = gevent.lock.RLock()
         # name the following separately so that, below, a check can be easily done
         mandadory_options = [
             TelnetOption(self, 'we-BINARY', BINARY, WILL, WONT, DO, DONT, INACTIVE),
@@ -422,12 +425,12 @@ class Serial(SerialBase):
         # cache for line and modem states that the server sends to us
         self._linestate = 0
         self._modemstate = None
-        self._modemstate_timeout = Timeout(-1)
+        self._modemstate_timeout = serial.Timeout(-1)
         # RFC 2217 flow control between server and client
         self._remote_suspend_flow = False
 
         self.is_open = True
-        self._thread = spawn(self._telnet_read_loop)
+        self._thread = gevent.spawn(self._telnet_read_loop)
 
         try:    # must clean-up if open fails
             # negotiate Telnet/RFC 2217 -> send initial requests
@@ -436,7 +439,7 @@ class Serial(SerialBase):
                     self.telnet_send_option(option.send_yes, option.option)
 
             # now wait until important options are negotiated
-            timeout_error = SerialException(
+            timeout_error = serial.SerialException(
                 "Remote does not seem to support RFC2217 or BINARY mode {!r}".format(mandadory_options))
             with gevent.Timeout(self._network_timeout, timeout_error):
                 gevent.wait([option.active_event for option in mandadory_options])
@@ -458,7 +461,7 @@ class Serial(SerialBase):
     def _reconfigure_port(self):
         """Set communication parameters on opened port."""
         if self._socket is None:
-            raise SerialException("Can only operate on open ports")
+            raise serial.SerialException("Can only operate on open ports")
 
         # if self._timeout != 0 and self._interCharTimeout is not None:
             # XXX
@@ -479,7 +482,7 @@ class Serial(SerialBase):
         # and now wait until parameters are active
         items = self._rfc2217_port_settings.values()
         self.logger.debug("Negotiating settings: {}".format(items))
-        timeout_error = SerialException(
+        timeout_error = serial.SerialException(
             "Remote does not accept parameter change (RFC2217): {!r}".format(items))
         with gevent.Timeout(self._network_timeout, timeout_error):
             gevent.wait([o.active_event for o in items])
@@ -507,7 +510,7 @@ class Serial(SerialBase):
             self._thread.join(7)  # XXX more than socket timeout
             self._thread = None
             # in case of quick reconnects, give the server some time
-            sleep(0.3)
+            gevent.sleep(0.3)
         self._socket = None
 
     def from_url(self, url):
@@ -515,15 +518,15 @@ class Serial(SerialBase):
         extract host and port from an URL string, other settings are extracted
         an stored in instance
         """
-        parts = parse.urlsplit(url)
+        parts = urllib.parse.urlsplit(url)
         if parts.scheme != "rfc2217":
-            raise SerialException(
+            raise serial.SerialException(
                 'expected a string in the form '
                 '"rfc2217://<host>:<port>[?option[&option...]]": '
                 'not starting with rfc2217:// ({!r})'.format(parts.scheme))
         try:
             # process options now, directly altering self
-            for option, values in parse.parse_qs(parts.query, True).items():
+            for option, values in urllib.parse.parse_qs(parts.query, True).items():
                 if option == 'logging':
                     logging.basicConfig()   # XXX is that good to call it here?
                     self.logger = logging.getLogger('gserial.rfc2217')
@@ -540,7 +543,7 @@ class Serial(SerialBase):
             if not 0 <= parts.port < 65536:
                 raise ValueError("port not in range 0...65535")
         except ValueError as e:
-            raise SerialException(
+            raise serial.SerialException(
                 'expected a string in the form '
                 '"rfc2217://<host>:<port>[?option[&option...]]": {}'.format(e))
         return (parts.hostname, parts.port)
@@ -565,7 +568,7 @@ class Serial(SerialBase):
         try:
             while len(data) < size:
                 if self._thread is None or self._thread.ready():
-                    raise SerialException('connection failed (reader thread died)')
+                    raise serial.SerialException('connection failed (reader thread died)')
                 buf = self._read_buffer.get()
                 if buf is None:
                     break
@@ -585,8 +588,8 @@ class Serial(SerialBase):
         """
         try:
             self._internal_raw_write(to_bytes(data).replace(IAC, IAC_DOUBLED))
-        except socket.error as e:
-            raise SerialException("connection failed (socket error): {}".format(e))
+        except gevent.socket.error as e:
+            raise serial.SerialException("connection failed (socket error): {}".format(e))
         return len(data)
 
     @ensure_open
@@ -672,20 +675,20 @@ class Serial(SerialBase):
             while self.is_open:
                 try:
                     data = self._socket.recv(1024)
-                except socket.timeout:
+                except gevent.socket.timeout:
                     # just need to get out of recv form time to time to check if
                     # still alive
                     continue
-                except socket.error as e:
+                except gevent.socket.error as e:
                     # connection fails -> terminate loop
                     self.logger.debug("socket error in reader thread: {}".format(e))
                     self._read_buffer.put(None)
                     break
-                self.logger.debug('RECV %r', data)
+                self.logger.debug('RECV %r', Strip(data))
                 if not data:
                     self._read_buffer.put(None)
                     break  # lost connection
-                for byte in iterbytes(data):
+                for byte in iter_bytes(data):
                     if mode == M_NORMAL:
                         # interpret as command or as data
                         if byte == IAC:
@@ -787,7 +790,7 @@ class Serial(SerialBase):
     def _internal_raw_write(self, data):
         """internal socket write with no data escaping. used to send telnet stuff."""
         with self._write_lock:
-            self.logger.debug('SEND %r', data)
+            self.logger.debug('SEND %r', Strip(data))
             self._socket.sendall(data)
 
     def telnet_send_option(self, action, option):
@@ -816,7 +819,7 @@ class Serial(SerialBase):
             # answers are ignored when option is set. compatibility mode for
             # servers that answer, but not the expected one... (or no answer
             # at all) i.e. sredird
-            sleep(0.1)  # this helps getting the unit tests passed
+            gevent.sleep(0.1)  # this helps getting the unit tests passed
         else:
             item.wait(self._network_timeout)  # wait for acknowledge from the server
 
@@ -840,7 +843,7 @@ class Serial(SerialBase):
             self.logger.debug('polling modem state')
             # when it is older, request an update
             self.rfc2217_send_subnegotiation(NOTIFY_MODEMSTATE)
-            timeout = Timeout(self._network_timeout)
+            timeout = serial.Timeout(self._network_timeout)
             while not timeout.expired():
                 gevent.sleep(0.05)    # prevent 100% CPU load
                 # when expiration time is updated, it means that there is a new
@@ -858,7 +861,7 @@ class Serial(SerialBase):
             return self._modemstate
         else:
             # never received a notification from the server
-            raise SerialException("remote sends no NOTIFY_MODEMSTATE")
+            raise serial.SerialException("remote sends no NOTIFY_MODEMSTATE")
 
 
 if __name__ == '__main__':
@@ -867,5 +870,7 @@ if __name__ == '__main__':
     s = Serial('rfc2217://localhost:2217')
     message = b'bla ble bli\n'
     s.write(message)
-    sleep(0.1)
+    assert s.readline() == message
+    message = 2048*b'Hello! ' + b'\n'
+    s.write(message)
     assert s.readline() == message
