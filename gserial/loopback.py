@@ -172,7 +172,7 @@ class Serial(SerialBase):
             # must wait so that unit test succeeds
             time_left = self._write_timeout
             while time_left > 0 and not self._cancel_write:
-                time.sleep(min(time_left, 0.5))
+                gevent.sleep(min(time_left, 0.5))
                 time_left -= 0.5
             if self._cancel_write:
                 return 0  # XXX
