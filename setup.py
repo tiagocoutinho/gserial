@@ -32,7 +32,7 @@ setup(
     license="GPL",
     long_description="A gevent friendly serial line",
     keywords='pyserial, gevent',
-    name='gserial',
+    name='gevent-serial',
     packages=find_packages(include=['gserial']),
     url='https://github.com/tiagocoutinho/gserial',
     version='0.2.0')
