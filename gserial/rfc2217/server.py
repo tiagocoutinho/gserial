@@ -44,6 +44,21 @@ def tcp_to_serial_loop(manager):
             break
 
 
+def serial_for_config(config):
+    opts = dict(config)
+    opts.pop('listener')
+    serial_url = opts.pop('url')
+    if 'open' in opts:
+        opts['do_not_open'] = not config.pop('open')
+    if 'parity' in config:
+        opts['parity'] = config['parity'][:1].upper()
+    if 'timeout' in config:
+        opts['timeout'] = config['timeout'] if config['timeout'] >= 0 else None
+    print(opts)
+    serial = gserial.serial_for_url(serial_url, **opts)
+    print(serial.baudrate)
+    return serial
+
 class Bridge:
 
     class Connection:
@@ -95,8 +110,7 @@ class Bridge:
 
     def handle(self, sock, addr):
         self.log.info('connection from %r', addr)
-        serial_url = self.config['url']
-        serial = gserial.serial_for_url(serial_url)
+        serial = serial_for_config(self.config)
         connection = self.Connection(sock)
         manager = PortManager(serial, connection)
         reader = gevent.spawn(self.serial_to_tcp_loop, manager)
