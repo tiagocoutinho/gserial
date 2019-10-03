@@ -5,6 +5,8 @@ with open(_serial.__file__) as _fserial:
 
 del _serial
 
+from .base import SerialBase
+
 VERSION = '0.1.0'
 
 import os
