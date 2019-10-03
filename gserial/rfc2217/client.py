@@ -566,7 +566,7 @@ class Serial(SerialBase):
                 data += buf
         except gevent.Timeout:
             pass
-        except Queue.Empty:
+        except gevent.queue.Empty:
             pass
         return bytes(data)
 

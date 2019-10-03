@@ -14,4 +14,3 @@ class SerialBase(serial.SerialBase):
         self.break_condition = True
         gevent.sleep(duration)
         self.break_condition = False
-
