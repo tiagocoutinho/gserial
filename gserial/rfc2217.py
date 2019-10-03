@@ -9,8 +9,7 @@ import gevent.event
 import gevent.queue
 import gevent.socket
 
-import serial
-
+import gserial
 from gserial.base import SerialBase
 from gserial.util import Strip, iter_bytes, to_bytes
 
@@ -161,18 +160,18 @@ PURGE_BOTH_BUFFERS = b'\x03'        # Purge both the access server receive data
 
 
 RFC2217_PARITY_MAP = {
-    serial.PARITY_NONE: 1,
-    serial.PARITY_ODD: 2,
-    serial.PARITY_EVEN: 3,
-    serial.PARITY_MARK: 4,
-    serial.PARITY_SPACE: 5,
+    gserial.PARITY_NONE: 1,
+    gserial.PARITY_ODD: 2,
+    gserial.PARITY_EVEN: 3,
+    gserial.PARITY_MARK: 4,
+    gserial.PARITY_SPACE: 5,
 }
 RFC2217_REVERSE_PARITY_MAP = dict((v, k) for k, v in RFC2217_PARITY_MAP.items())
 
 RFC2217_STOPBIT_MAP = {
-    serial.STOPBITS_ONE: 1,
-    serial.STOPBITS_ONE_POINT_FIVE: 3,
-    serial.STOPBITS_TWO: 2,
+    gserial.STOPBITS_ONE: 1,
+    gserial.STOPBITS_ONE_POINT_FIVE: 3,
+    gserial.STOPBITS_TWO: 2,
 }
 RFC2217_REVERSE_STOPBIT_MAP = dict((v, k) for k, v in RFC2217_STOPBIT_MAP.items())
 
@@ -308,7 +307,7 @@ class TelnetSubnegotiation(object):
         can also throw a value error when the answer from the server does not
         match the value sent.
         """
-        with gevent.Timeout(timeout, serial.SerialException("timeout while waiting for option {!r}".format(self.name))):
+        with gevent.Timeout(timeout, gserial.SerialException("timeout while waiting for option {!r}".format(self.name))):
             self.active_event.wait()
 
     def check_answer(self, suboption):
@@ -330,7 +329,7 @@ def ensure_open(f):
     @functools.wraps(f)
     def wrapper(self, *args, **kwargs):
         if not self.is_open:
-            raise serial.portNotOpenError
+            raise gserial.portNotOpenError
         return f(self, *args, **kwargs)
     return wrapper
 
@@ -344,7 +343,7 @@ class Serial(SerialBase):
         self._socket = None
         self._linestate = 0
         self._modemstate = None
-        self._modemstate_timeout = serial.Timeout(-1)
+        self._modemstate_timeout = gserial.Timeout(-1)
         self._remote_suspend_flow = False
         self._write_lock = None
         self.logger = log
@@ -366,9 +365,9 @@ class Serial(SerialBase):
         self._poll_modem_state = False
         self._network_timeout = 3
         if self._port is None:
-            raise serial.SerialException("Port must be configured before it can be used.")
+            raise gserial.SerialException("Port must be configured before it can be used.")
         if self.is_open:
-            raise serial.SerialException("Port is already open.")
+            raise gserial.SerialException("Port is already open.")
         addr = self.from_url(self.portstr)
         self.logger = logging.getLogger('RFC2217({}:{})'.format(*addr))
         try:
@@ -377,7 +376,7 @@ class Serial(SerialBase):
                                     gevent.socket.TCP_NODELAY, 1)
         except Exception as msg:
             self._socket = None
-            raise serial.SerialException("Could not open port {}: {}".format(self.portstr, msg))
+            raise gserial.SerialException("Could not open port {}: {}".format(self.portstr, msg))
 
         # use a thread save queue as buffer. it also simplifies implementing
         # the read timeout
@@ -416,7 +415,7 @@ class Serial(SerialBase):
         # cache for line and modem states that the server sends to us
         self._linestate = 0
         self._modemstate = None
-        self._modemstate_timeout = serial.Timeout(-1)
+        self._modemstate_timeout = gserial.Timeout(-1)
         # RFC 2217 flow control between server and client
         self._remote_suspend_flow = False
 
@@ -430,7 +429,7 @@ class Serial(SerialBase):
                     self.telnet_send_option(option.send_yes, option.option)
 
             # now wait until important options are negotiated
-            timeout_error = serial.SerialException(
+            timeout_error = gserial.SerialException(
                 "Remote does not seem to support RFC2217 or BINARY mode {!r}".format(mandadory_options))
             with gevent.Timeout(self._network_timeout, timeout_error):
                 gevent.wait([option.active_event for option in mandadory_options])
@@ -452,7 +451,7 @@ class Serial(SerialBase):
     def _reconfigure_port(self):
         """Set communication parameters on opened port."""
         if self._socket is None:
-            raise serial.SerialException("Can only operate on open ports")
+            raise gserial.SerialException("Can only operate on open ports")
 
         # if self._timeout != 0 and self._interCharTimeout is not None:
             # XXX
@@ -473,7 +472,7 @@ class Serial(SerialBase):
         # and now wait until parameters are active
         items = self._rfc2217_port_settings.values()
         self.logger.debug("Negotiating settings: {}".format(items))
-        timeout_error = serial.SerialException(
+        timeout_error = gserial.SerialException(
             "Remote does not accept parameter change (RFC2217): {!r}".format(items))
         with gevent.Timeout(self._network_timeout, timeout_error):
             gevent.wait([o.active_event for o in items])
@@ -511,7 +510,7 @@ class Serial(SerialBase):
         """
         parts = urllib.parse.urlsplit(url)
         if parts.scheme != "rfc2217":
-            raise serial.SerialException(
+            raise gserial.SerialException(
                 'expected a string in the form '
                 '"rfc2217://<host>:<port>[?option[&option...]]": '
                 'not starting with rfc2217:// ({!r})'.format(parts.scheme))
@@ -534,7 +533,7 @@ class Serial(SerialBase):
             if not 0 <= parts.port < 65536:
                 raise ValueError("port not in range 0...65535")
         except ValueError as e:
-            raise serial.SerialException(
+            raise gserial.SerialException(
                 'expected a string in the form '
                 '"rfc2217://<host>:<port>[?option[&option...]]": {}'.format(e))
         return (parts.hostname, parts.port)
@@ -559,7 +558,7 @@ class Serial(SerialBase):
         try:
             while len(data) < size:
                 if self._thread is None or self._thread.ready():
-                    raise serial.SerialException('connection failed (reader thread died)')
+                    raise gserial.SerialException('connection failed (reader thread died)')
                 buf = self._read_buffer.get()
                 if buf is None:
                     break
@@ -580,7 +579,7 @@ class Serial(SerialBase):
         try:
             self._internal_raw_write(to_bytes(data).replace(IAC, IAC_DOUBLED))
         except gevent.socket.error as e:
-            raise serial.SerialException("connection failed (socket error): {}".format(e))
+            raise gserial.SerialException("connection failed (socket error): {}".format(e))
         return len(data)
 
     @ensure_open
@@ -834,7 +833,7 @@ class Serial(SerialBase):
             self.logger.debug('polling modem state')
             # when it is older, request an update
             self.rfc2217_send_subnegotiation(NOTIFY_MODEMSTATE)
-            timeout = serial.Timeout(self._network_timeout)
+            timeout = gserial.Timeout(self._network_timeout)
             while not timeout.expired():
                 gevent.sleep(0.05)    # prevent 100% CPU load
                 # when expiration time is updated, it means that there is a new
@@ -852,7 +851,7 @@ class Serial(SerialBase):
             return self._modemstate
         else:
             # never received a notification from the server
-            raise serial.SerialException("remote sends no NOTIFY_MODEMSTATE")
+            raise gserial.SerialException("remote sends no NOTIFY_MODEMSTATE")
 
 
 if __name__ == '__main__':
