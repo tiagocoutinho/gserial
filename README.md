@@ -1,4 +1,4 @@
-# gserial
+# gevent-serial
 
 A python 3 [gevent](https://gevent.org) friendly access to the serial port.
 
@@ -17,6 +17,14 @@ Includes an optional serial to TCP bridge (experimental).
 From within your favourite python environment:
 
 ```console
-$ pip install gserial
+$ pip install gevent-serial
 ```
 
+### Serial to TCP bridge
+
+To be available, it requires you to install the optional server package
+with:
+
+```console
+$ pip install gevent-serial[ser2tcp]
+```
