@@ -286,8 +286,7 @@ class TelnetSubnegotiation(object):
         self.state = REQUESTED
         self.active_event.clear()
         self.connection.rfc2217_send_subnegotiation(self.option, self.value)
-        if self.connection.logger:
-            self.connection.logger.debug("SB Requesting {} -> {!r}".format(self.name, self.value))
+        self.connection.logger.debug("SB Requesting {} -> {!r}".format(self.name, self.value))
 
     def is_ready(self):
         """\
@@ -321,8 +320,7 @@ class TelnetSubnegotiation(object):
             # error propagation done in is_ready
             self.state = REALLY_INACTIVE
             self.active_event.clear()
-        if self.connection.logger:
-            self.connection.logger.debug("SB Answer {} -> {!r} -> {}".format(self.name, suboption, self.state))
+        self.connection.logger.debug("SB Answer {} -> {!r} -> {}".format(self.name, suboption, self.state))
 
 
 def ensure_open(f):
