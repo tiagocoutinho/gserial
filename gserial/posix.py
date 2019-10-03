@@ -13,6 +13,6 @@ del _fposix
 
 from gevent import select
 
-
-# TODO: serial.serialutil.Serial.send_break() uses time.sleep()
-#       so it needs to be hacked!
+# Hack send_break: it seems to be the only one to use time.sleep
+from gserial.base import SerialBase
+Serial.send_break = SerialBase.send_break

@@ -11,6 +11,7 @@ import gevent.socket
 
 import serial
 
+from gserial.base import SerialBase
 from gserial.util import Strip, iter_bytes, to_bytes
 
 
@@ -334,7 +335,7 @@ def ensure_open(f):
     return wrapper
 
 
-class Serial(serial.SerialBase):
+class Serial(SerialBase):
 
     BAUDRATES = (50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800,
                  9600, 19200, 38400, 57600, 115200)
@@ -355,16 +356,6 @@ class Serial(serial.SerialBase):
         self._rfc2217_options = None
         self._read_buffer = None
         super(Serial, self).__init__(*args, **kwargs)
-
-    @ensure_open
-    def send_break(self, duration=0.25):
-        """\
-        Send break condition. Timed, returns to idle state after given
-        duration.
-        """
-        self.break_condition = True
-        gevent.sleep(duration)
-        self.break_condition = False
 
     def open(self):
         """\
