@@ -1,5 +1,6 @@
 import struct
 import logging
+import functools
 import telnetlib
 from urllib import parse
 
@@ -324,6 +325,15 @@ class TelnetSubnegotiation(object):
             self.connection.logger.debug("SB Answer {} -> {!r} -> {}".format(self.name, suboption, self.state))
 
 
+def ensure_open(f):
+    @functools.wraps(f)
+    def wrapper(self, *args, **kwargs):
+        if not self.is_open:
+            raise portNotOpenError
+        return f(self, *args, **kwargs)
+    return wrapper
+
+
 class Serial(SerialBase):
 
     BAUDRATES = (50, 75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800,
@@ -346,13 +356,12 @@ class Serial(SerialBase):
         self._read_buffer = None
         super(Serial, self).__init__(*args, **kwargs)
 
+    @ensure_open
     def send_break(self, duration=0.25):
         """\
         Send break condition. Timed, returns to idle state after given
         duration.
         """
-        if not self.is_open:
-            raise portNotOpenError
         self.break_condition = True
         gevent.sleep(duration)
         self.break_condition = False
@@ -541,20 +550,18 @@ class Serial(SerialBase):
     #  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -
 
     @property
+    @ensure_open
     def in_waiting(self):
         """Return the number of bytes currently in the input buffer."""
-        if not self.is_open:
-            raise portNotOpenError
         return self._read_buffer.qsize()
 
+    @ensure_open
     def read(self, size=1):
         """\
         Read size bytes from the serial port. If a timeout is set it may
         return less characters as requested. With no timeout it will block
         until the requested number of bytes is read.
         """
-        if not self.is_open:
-            raise portNotOpenError
         data = bytearray()
         timeout = gevent.Timeout(self._timeout)
         try:
@@ -571,65 +578,59 @@ class Serial(SerialBase):
             pass
         return bytes(data)
 
+    @ensure_open
     def write(self, data):
         """\
         Output the given byte string over the serial port. Can block if the
         connection is blocked. May raise SerialException if the connection is
         closed.
         """
-        if not self.is_open:
-            raise portNotOpenError
         try:
             self._internal_raw_write(to_bytes(data).replace(IAC, IAC_DOUBLED))
         except socket.error as e:
             raise SerialException("connection failed (socket error): {}".format(e))
         return len(data)
 
+    @ensure_open
     def reset_input_buffer(self):
         """Clear input buffer, discarding all that is in the buffer."""
-        if not self.is_open:
-            raise portNotOpenError
         self.rfc2217_send_purge(PURGE_RECEIVE_BUFFER)
         # empty read buffer
         while self._read_buffer.qsize():
             self._read_buffer.get(False)
 
+    @ensure_open
     def reset_output_buffer(self):
         """\
         Clear output buffer, aborting the current output and
         discarding all that is in the buffer.
         """
-        if not self.is_open:
-            raise portNotOpenError
         self.rfc2217_send_purge(PURGE_TRANSMIT_BUFFER)
 
+    @ensure_open
     def _update_break_state(self):
         """\
         Set break: Controls TXD. When active, to transmitting is
         possible.
         """
-        if not self.is_open:
-            raise portNotOpenError
         self.logger.info('set BREAK to {}'.format('active' if self._break_state else 'inactive'))
         if self._break_state:
             self.rfc2217_set_control(SET_CONTROL_BREAK_ON)
         else:
             self.rfc2217_set_control(SET_CONTROL_BREAK_OFF)
 
+    @ensure_open
     def _update_rts_state(self):
         """Set terminal status line: Request To Send."""
-        if not self.is_open:
-            raise portNotOpenError
         self.logger.info('set RTS to {}'.format('active' if self._rts_state else 'inactive'))
         if self._rts_state:
             self.rfc2217_set_control(SET_CONTROL_RTS_ON)
         else:
             self.rfc2217_set_control(SET_CONTROL_RTS_OFF)
 
+    @ensure_open
     def _update_dtr_state(self):
         """Set terminal status line: Data Terminal Ready."""
-        if not self.is_open:
-            raise portNotOpenError
         self.logger.info('set DTR to {}'.format('active' if self._dtr_state else 'inactive'))
         if self._dtr_state:
             self.rfc2217_set_control(SET_CONTROL_DTR_ON)
@@ -637,31 +638,27 @@ class Serial(SerialBase):
             self.rfc2217_set_control(SET_CONTROL_DTR_OFF)
 
     @property
+    @ensure_open
     def cts(self):
         """Read terminal status line: Clear To Send."""
-        if not self.is_open:
-            raise portNotOpenError
         return bool(self.get_modem_state() & MODEMSTATE_MASK_CTS)
 
     @property
+    @ensure_open
     def dsr(self):
         """Read terminal status line: Data Set Ready."""
-        if not self.is_open:
-            raise portNotOpenError
         return bool(self.get_modem_state() & MODEMSTATE_MASK_DSR)
 
     @property
+    @ensure_open
     def ri(self):
         """Read terminal status line: Ring Indicator."""
-        if not self.is_open:
-            raise portNotOpenError
         return bool(self.get_modem_state() & MODEMSTATE_MASK_RI)
 
     @property
+    @ensure_open
     def cd(self):
         """Read terminal status line: Carrier Detect."""
-        if not self.is_open:
-            raise portNotOpenError
         return bool(self.get_modem_state() & MODEMSTATE_MASK_CD)
 
     # - - - platform specific - - -
