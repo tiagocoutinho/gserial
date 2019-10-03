@@ -209,6 +209,7 @@ class TelnetOption(object):
         self.ack_no = ack_no
         self.state = initial_state
         self.active = False
+        self.active_event = event.Event()
         self.activation_callback = activation_callback
 
     def __repr__(self):
@@ -224,6 +225,7 @@ class TelnetOption(object):
             if self.state is REQUESTED:
                 self.state = ACTIVE
                 self.active = True
+                self.active_event.set()
                 if self.activation_callback is not None:
                     self.activation_callback()
             elif self.state is ACTIVE:
@@ -232,6 +234,7 @@ class TelnetOption(object):
                 self.state = ACTIVE
                 self.connection.telnet_send_option(self.send_yes, self.option)
                 self.active = True
+                self.active_event.set()
                 if self.activation_callback is not None:
                     self.activation_callback()
             elif self.state is REALLY_INACTIVE:
@@ -242,10 +245,12 @@ class TelnetOption(object):
             if self.state is REQUESTED:
                 self.state = INACTIVE
                 self.active = False
+                self.active_event.clear()
             elif self.state is ACTIVE:
                 self.state = INACTIVE
                 self.connection.telnet_send_option(self.send_no, self.option)
                 self.active = False
+                self.active_event.clear()
             elif self.state is INACTIVE:
                 pass
             elif self.state is REALLY_INACTIVE:
@@ -269,7 +274,7 @@ class TelnetSubnegotiation(object):
         self.value = None
         self.ack_option = ack_option
         self.state = INACTIVE
-        self.state_event = event.Event()
+        self.active_event = event.Event()
 
     def __repr__(self):
         """String for debug outputs."""
@@ -283,7 +288,7 @@ class TelnetSubnegotiation(object):
         """
         self.value = value
         self.state = REQUESTED
-        self.state_event.clear()
+        self.active_event.clear()
         self.connection.rfc2217_send_subnegotiation(self.option, self.value)
         if self.connection.logger:
             self.connection.logger.debug("SB Requesting {} -> {!r}".format(self.name, self.value))
@@ -306,7 +311,7 @@ class TelnetSubnegotiation(object):
         match the value sent.
         """
         with gevent.Timeout(timeout, SerialException("timeout while waiting for option {!r}".format(self.name))):
-            self.state_event.wait()
+            self.active_event.wait()
 
     def check_answer(self, suboption):
         """\
@@ -315,11 +320,11 @@ class TelnetSubnegotiation(object):
         """
         if self.value == suboption[:len(self.value)]:
             self.state = ACTIVE
-            self.state_event.set()
+            self.active_event.set()
         else:
             # error propagation done in is_ready
             self.state = REALLY_INACTIVE
-            self.state_event.clear()
+            self.active_event.clear()
         if self.connection.logger:
             self.connection.logger.debug("SB Answer {} -> {!r} -> {}".format(self.name, suboption, self.state))
 
@@ -427,15 +432,12 @@ class Serial(SerialBase):
             for option in self._telnet_options:
                 if option.state is REQUESTED:
                     self.telnet_send_option(option.send_yes, option.option)
+
             # now wait until important options are negotiated
-            timeout = Timeout(self._network_timeout)
-            while not timeout.expired():
-                sleep(0.05)    # prevent 100% CPU load
-                if sum(o.active for o in mandadory_options) == sum(o.state != INACTIVE for o in mandadory_options):
-                    break
-            else:
-                raise SerialException(
-                    "Remote does not seem to support RFC2217 or BINARY mode {!r}".format(mandadory_options))
+            timeout_error = SerialException(
+                "Remote does not seem to support RFC2217 or BINARY mode {!r}".format(mandadory_options))
+            with gevent.Timeout(self._network_timeout, timeout_error):
+                gevent.wait([option.active_event for option in mandadory_options])
             self.logger.info("Negotiated options: {}".format(self._telnet_options))
 
             # fine, go on, set RFC 2271 specific things
@@ -475,13 +477,10 @@ class Serial(SerialBase):
         # and now wait until parameters are active
         items = self._rfc2217_port_settings.values()
         self.logger.debug("Negotiating settings: {}".format(items))
-        timeout = Timeout(self._network_timeout)
-        while not timeout.expired():
-            sleep(0.05)    # prevent 100% CPU load
-            if sum(o.active for o in items) == len(items):
-                break
-        else:
-            raise SerialException("Remote does not accept parameter change (RFC2217): {!r}".format(items))
+        timeout_error = SerialException(
+            "Remote does not accept parameter change (RFC2217): {!r}".format(items))
+        with gevent.Timeout(self._network_timeout, timeout_error):
+            gevent.wait([o.active_event for o in items])
         self.logger.info("Negotiated settings: {}".format(items))
         if self._rtscts and self._xonxoff:
             raise ValueError('xonxoff and rtscts together are not supported')
@@ -562,18 +561,18 @@ class Serial(SerialBase):
         if not self.is_open:
             raise portNotOpenError
         data = bytearray()
+        timeout = gevent.Timeout(self._timeout)
         try:
-            timeout = Timeout(self._timeout)
             while len(data) < size:
-                if self._thread is None:
+                if self._thread is None or self._thread.ready():
                     raise SerialException('connection failed (reader thread died)')
-                buf = self._read_buffer.get(True, timeout.time_left())
+                buf = self._read_buffer.get()
                 if buf is None:
-                    return bytes(data)
-                data += buf
-                if timeout.expired():
                     break
-        except Queue.Empty:  # -> timeout
+                data += buf
+        except gevent.Timeout:
+            pass
+        except Queue.Empty:
             pass
         return bytes(data)
 
@@ -878,5 +877,4 @@ if __name__ == '__main__':
     message = b'bla ble bli\n'
     s.write(message)
     sleep(0.1)
-    s.read_all() == message
-
+    assert s.readline() == message
