@@ -1,3 +1,28 @@
+import time
+
+
+def iter_bytes(b):
+    """Iterate over bytes, returning bytes instead of ints (python3)"""
+    if isinstance(b, memoryview):
+        b = b.tobytes()
+    for i in range(len(b)):
+        yield b[i:i + 1]
+
+
+def to_bytes(seq):
+    """convert a sequence to a bytes type"""
+    if isinstance(seq, bytes):
+        return seq
+    elif isinstance(seq, bytearray):
+        return bytes(seq)
+    elif isinstance(seq, memoryview):
+        return seq.tobytes()
+    elif isinstance(seq, str):
+        raise TypeError('str is not supported, please encode to bytes: {!r}'.format(seq))
+    else:
+        return bytes(seq)
+
+
 class Strip(object):
     """
     Encapsulate object with a short str/repr/format.
@@ -35,33 +60,48 @@ class Strip(object):
         return self.__strip(format(self.obj, format_spec))
 
 
-# "for byte in data" fails for python3 as it returns ints instead of bytes
-def iter_bytes(b):
-    """Iterate over bytes, returning bytes instead of ints (python3)"""
-    if isinstance(b, memoryview):
-        b = b.tobytes()
-    i = 0
-    while True:
-        a = b[i:i + 1]
-        i += 1
-        if a:
-            yield a
+class Timeout(object):
+    """
+    Abstraction for timeout operations. Using time.monotonic()
+
+    The class can also be initialized with 0 or None, in order to support
+    non-blocking and fully blocking I/O operations. The attributes
+    is_non_blocking and is_infinite are set accordingly.
+    """
+
+    def __init__(self, duration):
+        """Initialize a timeout with given duration"""
+        self.is_infinite = (duration is None)
+        self.is_non_blocking = (duration == 0)
+        self.duration = duration
+        if duration is not None:
+            self.target_time = time.monotonic() + duration
         else:
-            break
+            self.target_time = None
 
+    def expired(self):
+        """Return a boolean, telling if the timeout has expired"""
+        return self.target_time is not None and self.time_left() <= 0
 
-# all Python versions prior 3.x convert ``str([17])`` to '[17]' instead of '\x11'
-# so a simple ``bytes(sequence)`` doesn't work for all versions
-def to_bytes(seq):
-    """convert a sequence to a bytes type"""
-    if isinstance(seq, bytes):
-        return seq
-    elif isinstance(seq, bytearray):
-        return bytes(seq)
-    elif isinstance(seq, memoryview):
-        return seq.tobytes()
-    elif isinstance(seq, str):
-        raise TypeError('str is not supported, please encode to bytes: {!r}'.format(seq))
-    else:
-        # handle list of integers and bytes (one or more items) for Python 2 and 3
-        return bytes(bytearray(seq))
+    def time_left(self):
+        """Return how many seconds are left until the timeout expires"""
+        if self.is_non_blocking:
+            return 0
+        elif self.is_infinite:
+            return None
+        else:
+            delta = self.target_time - time.monotonic()
+            if delta > self.duration:
+                # clock jumped, recalculate
+                self.target_time = time.monotonic() + self.duration
+                return self.duration
+            else:
+                return max(0, delta)
+
+    def restart(self, duration):
+        """
+        Restart a timeout, only supported if a timeout was already set up
+        before.
+        """
+        self.duration = duration
+        self.target_time = time.monotonic() + duration

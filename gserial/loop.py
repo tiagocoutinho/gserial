@@ -5,9 +5,9 @@ import urllib.parse
 
 import gevent.queue
 
-from gserial.base import SerialBase
-from gserial.util import to_bytes, iter_bytes
-from gserial import SerialException, writeTimeoutError, portNotOpenError
+from .base import SerialBase
+from .util import to_bytes, iter_bytes
+from .exception import SerialException, writeTimeoutError, portNotOpenError
 
 
 log = logging.getLogger('gserial.loop')
@@ -31,7 +31,7 @@ class Serial(SerialBase):
     def __init__(self, *args, **kwargs):
         self.buffer_size = 4096
         self.queue = None
-        self.logger = log.getChild('Loopback()')
+        self.logger = log.getChild('Loopback')
         self._cancel_write = False
         super(Serial, self).__init__(*args, **kwargs)
 
