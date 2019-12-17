@@ -191,7 +191,7 @@ class TelnetOption(object):
     """Manage a single telnet option, keeps track of DO/DONT WILL/WONT."""
 
     def __init__(self, connection, name, option, send_yes, send_no, ack_yes,
-                 ack_no, initial_state, activation_callback=None):
+                 ack_no, initial_state, activation_callback=None, deactivation_callback=None):
         """\
         Initialize option.
         :param connection: connection used to transmit answers
@@ -214,6 +214,7 @@ class TelnetOption(object):
         self.active = False
         self.active_event = gevent.event.Event()
         self.activation_callback = activation_callback or (lambda : None)
+        self.deactivation_callback = deactivation_callback or (lambda : None)
 
     def __repr__(self):
         """String for debug outputs"""
@@ -226,38 +227,42 @@ class TelnetOption(object):
         """
         if command == self.ack_yes:
             if self.state is REQUESTED:
-                self.state = ACTIVE
-                self.active = True
-                self.active_event.set()
-                self.activation_callback()
+                self.activate()
             elif self.state is ACTIVE:
                 pass
             elif self.state is INACTIVE:
-                self.state = ACTIVE
-                self.connection.telnet_send_option(self.send_yes, self.option)
-                self.active = True
-                self.active_event.set()
-                self.activation_callback()
+                self.activate(send=True)
             elif self.state is REALLY_INACTIVE:
                 self.connection.telnet_send_option(self.send_no, self.option)
             else:
                 raise ValueError('option in illegal state {!r}'.format(self))
         elif command == self.ack_no:
             if self.state is REQUESTED:
-                self.state = INACTIVE
-                self.active = False
-                self.active_event.clear()
+                self.deactivate()
             elif self.state is ACTIVE:
-                self.state = INACTIVE
-                self.connection.telnet_send_option(self.send_no, self.option)
-                self.active = False
-                self.active_event.clear()
+                self.deactivate(send=True)
             elif self.state is INACTIVE:
                 pass
             elif self.state is REALLY_INACTIVE:
                 pass
             else:
                 raise ValueError('option in illegal state {!r}'.format(self))
+
+    def activate(self, send=False):
+        self.state = ACTIVE
+        if send:
+            self.connection.telnet_send_option(self.send_yes, self.option)
+        self.active = True
+        self.active_event.set()
+        self.activation_callback()
+
+    def deactivate(self, send=False):
+        self.state = INACTIVE
+        if send:
+            self.connection.telnet_send_option(self.send_no, self.option)
+        self.active = False
+        self.active_event.clear()
+        self.deactivation_callback()
 
 
 class TelnetSubnegotiation(object):
@@ -388,9 +393,13 @@ class Serial(base.SerialBase):
         # telnet/rfc2217 options establish a lock
         self._write_lock = gevent.lock.RLock()
         # name the following separately so that, below, a check can be easily done
+        all_mandatory = gevent.event.Event()
+        def event_callback():
+            if sum(o.active for o in mandadory_options) == sum(o.state != INACTIVE for o in mandadory_options):
+                all_mandatory.set()
         mandadory_options = [
-            TelnetOption(self, 'we-BINARY', BINARY, WILL, WONT, DO, DONT, INACTIVE),
-            TelnetOption(self, 'we-RFC2217', COM_PORT_OPTION, WILL, WONT, DO, DONT, REQUESTED),
+            TelnetOption(self, 'we-BINARY', BINARY, WILL, WONT, DO, DONT, INACTIVE, event_callback, event_callback),
+            TelnetOption(self, 'we-RFC2217', COM_PORT_OPTION, WILL, WONT, DO, DONT, REQUESTED, event_callback, event_callback),
         ]
         # all supported telnet options
         self._telnet_options = [
@@ -435,7 +444,7 @@ class Serial(base.SerialBase):
             timeout_error = SerialException(
                 "Remote does not seem to support RFC2217 or BINARY mode {!r}".format(mandadory_options))
             with gevent.Timeout(self._network_timeout, timeout_error):
-                gevent.wait([option.active_event for option in mandadory_options])
+                all_mandatory.wait()
             self.logger.info("Negotiated options: {}".format(self._telnet_options))
 
             # fine, go on, set RFC 2271 specific things
