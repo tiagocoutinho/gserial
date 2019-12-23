@@ -28,3 +28,32 @@ with:
 ```console
 $ pip install gevent-serial[ser2tcp]
 ```
+
+The ser2tcp server needs a configuration file written in YAML. It consists of a
+list of serial entries. Each entry describes the serial port address (url),
+the TCP port (listener) and optionally a TCP mode and other serial line options
+(baudrate, parity, byte size, etc.)
+
+Here is an example:
+
+```yaml
+- url: /dev/ttyS0
+  baudrate: 9600
+  listener: :2217   # listen on all network interfaces, TCP port 2217
+  mode: rfc2217
+
+- url: /dev/ttyS1
+  baudrate: 115200
+  mode: raw
+  listener: :2218
+
+- url: loop://
+  listener: :2219
+  baudrate: 115200
+  mode: raw
+
+- url: loop://
+  listener: :2220
+  baudrate: 9600
+  mode: rfc2217
+```
