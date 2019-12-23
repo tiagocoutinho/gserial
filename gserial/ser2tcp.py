@@ -4,7 +4,7 @@ import logging
 import gevent.server
 
 import gserial
-from .manager import PortManager
+from gserial.rfc2217.manager import PortManager
 
 
 log = logging.getLogger('gserial.rfc2217.server')
@@ -46,7 +46,6 @@ def tcp_to_serial_loop(manager):
 
 def serial_for_config(config):
     opts = dict(config)
-    opts.pop('listener')
     serial_url = opts.pop('url')
     if 'open' in opts:
         opts['do_not_open'] = not config.pop('open')
@@ -54,10 +53,41 @@ def serial_for_config(config):
         opts['parity'] = config['parity'][:1].upper()
     if 'timeout' in config:
         opts['timeout'] = config['timeout'] if config['timeout'] >= 0 else None
-    print(opts)
     serial = gserial.serial_for_url(serial_url, **opts)
-    print(serial.baudrate)
     return serial
+
+
+
+IPTOS_NORMAL = 0x0
+IPTOS_LOWDELAY = 0x10
+IPTOS_THROUGHPUT = 0x08
+IPTOS_RELIABILITY = 0x04
+IPTOS_MINCOST = 0x02
+
+def tos(value):
+    if tos in ('lowdelay', 'LOWDELAY', IPTOS_LOWDELAY):
+        return IPTOS_LOWDELAY
+    elif tos in ('throughput', 'THROUGHPUT', IPTOS_THROUGHPUT):
+        IPTOS_THROUGHPUT
+    elif tos in ('reliability', 'RELIABILITY', IPTOS_RELIABILITY):
+        return IPTOS_RELIABILITY
+    elif tos in ('mincost', 'MINCOST', IPTOS_MINCOST):
+        return IPTOS_MINCOST
+    return IPTOS_NORMAL
+
+
+class RawPortManager:
+
+    def __init__(self, serial, connection):
+        self.serial = serial
+        self.connection = connection
+
+    def filter(self, data):
+        return data,
+
+    def escape(self, data):
+        return data
+
 
 class Bridge:
 
@@ -67,13 +97,16 @@ class Bridge:
             self.recv = sock.recv
 
     def __init__(self, config):
-        self.config = config
         sl = config['url']
-        listener = config['listener']
-        self.log = log.getChild('Bridge({}<->{})'.format(sl, listener))
+        self.listener = config.pop('listener')
+        self.no_delay = config.pop('no_delay', False)
+        self.tos = tos(config.pop('tos', None))
+        self.mode = config.pop('mode', 'rfc2217')
+        self.config = config
+        self.log = log.getChild('Bridge({}<->{})'.format(sl, self.listener))
 
     def serve_forever(self):
-        tcp_listener = self.config['listener']
+        tcp_listener = self.listener
         if isinstance(tcp_listener, list):
             tcp_listener = tuple(tcp_listener)
         self.server = gevent.server.StreamServer(tcp_listener, self.handle)
@@ -96,6 +129,8 @@ class Bridge:
         self.log.info('tcp to serial task started')
         try:
             tcp_to_serial_loop(manager)
+        except ConnectionResetError:
+            self.log.info('client disconnected')
         except gevent.socket.error as msg:
             self.log.exception('error on tcp to serial:'.format(msg))
         finally:
@@ -110,17 +145,27 @@ class Bridge:
 
     def handle(self, sock, addr):
         self.log.info('connection from %r', addr)
+        if self.no_delay:
+            # disable nagle's algorithm
+            sock.setsockopt(gevent.socket.IPPROTO_TCP,
+                            gevent.socket.TCP_NODELAY, 1)
+        sock.setsockopt(gevent.socket.SOL_IP, gevent.socket.IP_TOS, self.tos)
         serial = serial_for_config(self.config)
         connection = self.Connection(sock)
-        manager = PortManager(serial, connection)
-        reader = gevent.spawn(self.serial_to_tcp_loop, manager)
-        writer = gevent.spawn(self.tcp_to_serial_loop, manager)
-        poller = gevent.spawn(self.poll_statusline, manager)
-        gevent.joinall((reader, writer, poller), count=1)
+        rfc2217 = self.mode.lower() == 'rfc2217'
+        Manager = PortManager if rfc2217 else RawPortManager
+        manager = Manager(serial, connection)
+        tasks = [
+            gevent.spawn(self.serial_to_tcp_loop, manager),
+            gevent.spawn(self.tcp_to_serial_loop, manager),
+        ]
+        if rfc2217:
+            tasks.append(
+                gevent.spawn(self.poll_statusline, manager)
+            )
+        gevent.joinall(tasks, count=1)
         self.log.info('disconnection from %r', addr)
-        reader.kill()
-        writer.kill()
-        poller.kill()
+        gevent.killall(tasks)
         serial.close()
         sock.close()
 

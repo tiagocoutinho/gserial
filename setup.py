@@ -26,7 +26,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'ser2tcp=gserial.rfc2217.server:main [ser2tcp]'
+            'ser2tcp=gserial.ser2tcp:main [ser2tcp]'
         ]
     },
     license="GPL",
