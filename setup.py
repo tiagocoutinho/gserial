@@ -39,4 +39,4 @@ setup(
     name='gevent-serial',
     packages=find_packages(),
     url='https://github.com/tiagocoutinho/gserial',
-    version='0.2.3')
+    version='0.2.4')
