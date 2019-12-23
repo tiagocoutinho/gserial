@@ -5,6 +5,9 @@
 from setuptools import setup, find_packages
 
 
+with open('README.md') as f:
+    description = f.read()
+
 setup(
     author="Tiago Coutinho",
     author_email='coutinhotiago@gmail.com',
@@ -30,7 +33,8 @@ setup(
         ]
     },
     license="GPL",
-    long_description="A gevent friendly serial line",
+    long_description=description,
+    long_description_content_type='text/markdown',
     keywords='pyserial, gevent',
     name='gevent-serial',
     packages=find_packages(),
